@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html>
+
+<!--
+
+To run this demo, you need to replace 'YOUR-API-KEY' with an API key from the ArcGIS Developers dashboard.
+
+Sign up for a free account and get an API key.
+
+https://developers.arcgis.com/documentation/mapping-apis-and-location-services/get-started/
+
+ --><html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>ArcGIS Developer Guide: Facility routing</title>
+  <style>
+    html, body, #viewDiv {
+      padding: 0;
+      margin: 0;
+      height: 100%;
+      width: 100%;
+    }
+    
+    #info-pane {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1000px;
+      padding: 1em;
+      background: white;
+      max-width: 240px;
+    }
+    #infoDiv {
+          Position: absolute;
+          background-color: white;
+          color: black;
+          padding: 6px;
+          width: 400px;
+          z-index: 1000px;
+        }
+    #results {
+      font-weight: bolder;
+      padding-top: 10px;
+    }
+    #drop-downs{
+          padding-bottom: 15px;
+          z-index: 1000px;
+    }
+  </style>
+
+  <link rel="stylesheet" href="https://js.arcgis.com/4.18/esri/themes/light/main.css">
+  <script src="https://js.arcgis.com/4.18/"></script>
+
+  <script>
+    require([
+      "esri/config",
+      "esri/Map",
+      "esri/views/MapView",
+      "esri/Graphic",
+      "esri/layers/GraphicsLayer",
+       "esri/layers/FeatureLayer",
+      "esri/tasks/ClosestFacilityTask",
+      "esri/tasks/support/ClosestFacilityParameters",
+      "esri/tasks/support/FeatureSet",
+      "esri/geometry/Point",
+      "esri/symbols/Symbol",
+    ], function (
+      esriConfig,
+      Map,
+      MapView,
+      Graphic,
+      GraphicsLayer,
+      FeatureLayer,
+      ClosestFacilityTask,
+      ClosestFacilityParameters,
+      FeatureSet,
+      Point,
+      Symbol
+    ) {
+      esriConfig.apiKey = "AAPK3987157fccc442d3bad6525ae57d8dd5rJ6OwfsvJXT2v_LnpeoaXmDgpbr_-5RXLs_HG362WbjUfrpuq_bvQ-XJEeUPBIB0";
+
+      let routeSymbol = {
+        type: "simple-line",
+        color: [50, 150, 255, 0.75],
+        width: "5",
+      };
+      
+       var hospitalsTypeSelect = document.getElementById("hosp-type");
+
+      
+      var hospitals = new FeatureLayer({
+            portalItem: {
+              // autocasts as new PortalItem()
+              id: "86bd2897b6254f3b9ca700177b954228"
+            },
+            outFields: ["*"],
+            visible: true
+          });
+
+      const facilities = [
+        [36.7820334999994,-1.29104969999998],
+        [36.8992900000001,-1.22316999999991],
+        [36.7824588999994,-1.29099549999998]
+      
+      ];
+
+      const routesLayer = new GraphicsLayer();
+      const hospitalsLayer = new GraphicsLayer();
+        const facilitiesLayer = new GraphicsLayer();
+
+      let map = new Map({
+        basemap: "arcgis-streets",
+        layers: [routesLayer, hospitals, facilitiesLayer],
+      });
+
+      let view = new MapView({
+        container: "viewDiv",
+        map: map,
+        center: [36.8,-1.3],
+        zoom: 10,
+        constraints: {
+          snapToZoom: false
+        }
+      });
+
+      view.popup.actions = [];
+       view.ui.add("infoDiv", "top-right");
+      view.when(function() {
+              return hospitals.when(function() {
+                var query = hospitals.createQuery();
+                return hospitals.queryFeatures(query);
+              });
+            })
+            .then(getValues)
+            .then(getUniqueValues)
+            .then(addToSelect);
+
+          view.on("click", (event) => {
+            view.hitTest(event).then((response) => {
+            if (response.results.length === 1) {
+                findClosestFacility(
+                addStartGraphic(event.mapPoint),
+                hospitalsLayer.graphics
+                );
+            }
+            });
+           });
+ 
+           // return an array of all the values in the
+          // SpecialistType field of the hospitals layer
+          function getValues(response) {
+            var features = response.features;
+            var values = features.map(function(feature) {
+              return feature.attributes.SpecialistType;
+            });
+            return values;
+          }
+
+          // return an array of unique values in
+          // the SpecialistType field of the hospitals layer
+          function getUniqueValues(values) {
+            var uniqueValues = [];
+
+            values.forEach(function(item, i) {
+              if ((uniqueValues.length < 1 || uniqueValues.indexOf(item) === -1) && item !== "") {
+                uniqueValues.push(item);
+              }
+            });
+            return uniqueValues;
+            
+          }
+          
+          // Add the unique values to the hospitals type
+          // select element. This will allow the user
+          // to filter hospitals by type.
+          function addToSelect(values) {
+            values.sort();
+            values.forEach(function(value) {
+              var option = document.createElement("option");
+              option.text = value;
+              hospitalsTypeSelect.add(option);
+            });
+
+            return setHospitalsDefinitionExpression(hospitalsTypeSelect.value);
+          }
+           
+          // set the definition expression on the hospitals
+          // layer to reflect the selection of the user
+          function setHospitalsDefinitionExpression(newValue) {
+            hospitals.definitionExpression = "SpecialistType = '" + newValue + "'";
+
+            if (!hospitals.visible) {
+              hospitals.visible = true;
+            }
+
+            return queryForHospitalsGeometries();
+          }
+
+          // Get all the geometries of the wells layer
+          // the createQuery() method creates a query
+          // object that respects the definitionExpression
+          // of the layer
+          function queryForHospitalsGeometries() {
+            var hospitalsQuery = hospitals.createQuery();
+
+            return hospitals.queryFeatures(hospitalsQuery).then(function(response) {
+              hospitalsGeometries = response.features.map(function(feature) {
+                return feature.geometry;
+              });
+
+              return hospitalsGeometries;
+            });
+          }
+
+          // set a new definitionExpression on the wells layer
+          // and create a new buffer around the new wells
+          hospitalsTypeSelect.addEventListener("change", function() {
+            var type = event.target.value;
+            setHospitalsDefinitionExpression(type);
+          });
+
+      view.when(() => {
+        addFacilityGraphics();
+        findClosestFacility(addStartGraphic(view.center), hospitalsLayer.graphics);
+      });
+
+      view.on("click", (event) => {
+        view.hitTest(event).then((response) => {
+          if (response.results.length === 1) {
+            findClosestFacility(
+              addStartGraphic(event.mapPoint),
+              hospitalsLayer.graphics
+            );
+          }
+        });
+      });
+
+
+      function findClosestFacility(startFeature, facilityFeatures) {
+
+        const closestFacilityTask = new ClosestFacilityTask({
+          url: "https://route-api.arcgis.com/arcgis/rest/services/World/ClosestFacility/NAServer/ClosestFacility_World/solveClosestFacility/",
+        });
+
+        const params = new ClosestFacilityParameters({
+          incidents: new FeatureSet({
+            features: [startFeature],
+          }),
+          facilities: new FeatureSet({
+            features: facilityFeatures.toArray(),
+          }),
+          returnRoutes: true,
+          returnFacilities: true,
+          defaultTargetFacilityCount: 1,
+        });
+
+        closestFacilityTask.solve(params).then(
+          (results) => {
+            showRoutes(results.routes);
+          },
+          (error) => {
+            console.log(error.details);
+          }
+        );
+      }
+
+
+      function addStartGraphic(point) {
+        view.graphics.removeAll();
+        const graphic = new Graphic({
+          symbol: {
+            type: "simple-marker",
+            color: [255, 255, 255, 1.0],
+            size: 8,
+            outline: {
+              color: [50, 50, 50],
+              width: 1,
+            },
+          },
+          geometry: point,
+        });
+        view.graphics.add(graphic);
+        return graphic;
+      }
+
+      function addFacilityGraphics() {
+        facilities.forEach((point) => {
+          facilitiesLayer.graphics.add(
+            new Graphic({
+              symbol: {
+                type: "web-style",
+                name: "grocery-store",
+                styleName: "Esri2DPointSymbolsStyle",
+              },
+              geometry: {
+                type: "point",
+                longitude: point[0],
+                latitude: point[1],
+                spatialReference: view.spatialReference,
+              },
+            })
+          );
+        });
+      }
+
+      function addFacilityGraphics() {
+        Array.from(hospitals).forEach(point => {
+          hospitalsLayer.graphics.add(
+            new Graphic({
+              symbol: {
+                type: "web-style",
+                name: "grocery-store",
+                styleName: "Esri2DPointSymbolsStyle",
+              },
+              geometry: {
+                type: "point",
+                longitude: point[0],
+                latitude: point[1],
+                spatialReference: view.spatialReference,
+              },
+            })
+          );
+        });
+      }
+
+      function showRoutes(routes) {
+        // Show the routes to the closest facilities
+        routesLayer.removeAll();
+        routes.forEach((route, i) => {
+          route.symbol = routeSymbol;
+          routesLayer.add(route);
+        });
+      }
+    });
+  </script>
+</head>
+<body>
+  <div id="viewDiv"></div>
+  <div id="infoDiv" class="esri-widget">
+        <div id="drop-downs">
+          Choose Specialist:
+          <select id="hosp-type" class="esri-widget"></select>
+        </div>
+      </div>
+</body>
+</html>
+</html>
